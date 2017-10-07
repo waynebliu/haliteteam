@@ -6,6 +6,9 @@ to log anything use the logging module.
 import hlt
 import numpy as np
 import pandas as pd
+import logging
+logging.basicConfig(filename='mybot.log',level=logging.DEBUG)
+
 
 # constants
 MyPlanetGradientRadius = 10
@@ -20,6 +23,7 @@ LowWeight = -999999
 # global just to avoid memory allocations...
 Xship = np.outer( range(-7,8), np.ones(15) )
 Yship = np.outer( np.ones(15), range(-7,8) )
+maxrangemask = None
 gradientfield = None
 Xmap = None
 Ymap = None
@@ -49,16 +53,19 @@ def doOneTurn():
     # TURN END
 
 def initMaps(game_map):
-    global Xship,Yship,Xmap,Ymap,pathlists,pointsetmaplist,angleof,speedof,gradientfield
-    if not Xmap:
+    global Xship,Yship,Xmap,Ymap,pathlists,pointsetmaplist,angleof,speedof,gradientfield,maxrangemask
+    if Xmap is None:
         Xmap = np.outer( range(game_map.width+14), np.ones(game_map.height+14) )
         Ymap = np.outer( np.ones(game_map.width+14), range(game_map.height+14) )
         gradientfield = np.zeros([game_map.width+14,game_map.height+14])
         pathlists = genPathLists()
         pointsetmaplist = getPointSetList(pathlists)
-        speedof = np.sqrt(Xship * Xship + Yship * Yship).reshape(15*15)
-        angleof = np.degrees(np.arctan2(Xship,Yship)).reshape(15*15)
+        speed = np.sqrt(Xship * Xship + Yship * Yship)
+        speedof = speed.reshape(15*15)
+        angleof = ( (np.degrees(np.arctan2(Xship,Yship)) + 270 )% 360).reshape(15*15)
+        maxrangemask = (speed >7).reshape(15*15)
 
+saved = 1
 class Analysis:
     def __init__(self,game_map):
         global gradientfield
@@ -70,15 +77,20 @@ class Analysis:
         self.shipX,self.shipY = getEntityXYs(self.me.all_ships())
         self.closeShips = computeEntitiesDistances(
                 self.shipX, self.shipY,
-                self.shipX, self.shipY)
+                self.shipX, self.shipY) < 14
 
         self.planetX,self.planetY = getEntityXYs(game_map.all_planets())
         self.planetDist = computeEntitiesDistances(self.shipX,self.shipY,
                 self.planetX, self.planetY)
-        planetRadius = tuple(p.radius for p in game_map.all_planets())
+        self.planetRadius = tuple(p.radius for p in game_map.all_planets())
         planetCloseness = np.outer( np.ones( len(self.me.all_ships() ) ),
-                                    planetRadius ) + 7
+                                    self.planetRadius ) + 7
         self.closePlanets = self.planetDist < planetCloseness
+        global saved
+        #np.savetxt("dist{}.csv".format(saved), self.planetDist, delimiter=",")
+        #np.savetxt("closeness{}.csv".format(saved), planetCloseness, delimiter=",")
+        #np.savetxt("close{}.csv".format(saved), self.closePlanets, delimiter=",")
+        #saved += 1
 
         enemyships = []
         for player in game_map.all_players():
@@ -113,13 +125,17 @@ class Analysis:
 
 
 def applyPlanetField(x, y, radius, gradientfield, strength, gradientradius):
+    #logging.info( ("planet", x, y, radius, strength, gradientradius) )
     gradientfield += ( ( gradientradius - np.sqrt( 
-              np.multiply( Xmap - (x+7), Xmap - (x+7)) + np.multiply( Ymap - (y+7), Ymap - (y+y))
-            ) ) * strength ).clip(min=0)
+              np.multiply( Xmap - (x+7), Xmap - (x+7)) 
+              + np.multiply( Ymap - (y+7), Ymap - (y+7))
+            ) ) * strength / gradientradius ).clip(min=0)
     # don't go to any point on the planet
-    gradientfield += ( ( (radius+1) - np.sqrt( 
-              np.multiply( Xmap - (x+7), Xmap - (x+7)) + np.multiply( Ymap - (y+7), Ymap - (y+7))
-            ) ) ).clip(max=.1, min=0) * LowWeight
+    planetmask = np.sqrt( 
+              np.multiply( Xmap - (x+7), Xmap - (x+7)) 
+              + np.multiply( Ymap - (y+7), Ymap - (y+7))
+            ) < (radius + 2)
+    gradientfield[planetmask] = LowWeight
 
 def getEntityXYs(myships):
     return tuple( s.x for s in myships), tuple( s.y for s in myships )
@@ -153,11 +169,16 @@ def commandShips(game_map, analysis):
         # check if I'm near any dockable planets
         dock = False
         for p in np.argwhere(analysis.closePlanets[i]):
-            if self.planetDist[i][p] < 5:
+            #logging.info( (i,p,analysis.planetDist,analysis.planetRadius) )
+            if analysis.planetDist[i][p[0]] < 5+analysis.planetRadius[p[0]]:
+                planet = game_map.all_planets()[p[0]]
+                if planet.is_full() or (planet.owner is not None 
+                                and planet.owner != analysis.me):
+                    continue
+                turnstate.addDock(ship,planet)
                 dock=True
                 break
         if dock:
-            turnstate.addDock(ship,planet)
             continue
 
         # move to somewhere...
@@ -180,29 +201,36 @@ class TurnState:
 
 def maneuverShip(ship, i, turnstate, analysis, game_map):
     movemap = gradientfield[ 
-                    (ship.x-0):(ship.x+15),
-                    (ship.y-0):(ship.y+15) 
-                ].copy()
+                    int(ship.x-0):int(ship.x+15),
+                    int(ship.y-0):int(ship.y+15) 
+                ].copy().reshape(15*15)
+    #logging.info( movemap.reshape([15,15]).clip(min=0) )
     # check friendly ships
     # we don't care about ramming enemy ships!
     for other in np.argwhere(analysis.closeShips[i]):
-        path = turnstate.shippaths.get(other)
+        if other == i:
+            continue
+        path = turnstate.shippaths.get(other[0])
         if path is not None:
             blotout(movemap, path, ship.x, ship.y)
         else:
-            othership = analysis.me.all_ships()[other]
+            othership = analysis.me.all_ships()[other[0]]
             blotout(movemap, [(othership.x,othership.y,i) for i in range(1,8)], ship.x, ship.y)
     # find highest point in movemap and go there
-    turnstate.addMove( ship, i, movemap.argmax() )
+    movemap[maxrangemask] = LowWeight
+    target = movemap.argmax()
+    #logging.info( ("move", ship.x,ship.y,i,target%15-7,target/15-7) )
+    turnstate.addMove( ship, i, target )
 
 
 
 def blotout(movemap,path,shipx,shipy):
     ''' blot out any square that's blocked '''
-    inds = np.concatenate( 
-        pointsetmaplist.get( (x-shipx,y-shipy,step), ((),()) )
-        for x,y,step in path)
-    movemap[ inds ] = -1
+    for x,y,step in path:
+        inds = pointsetmaplist.get( (x-shipx,y-shipy,step), [] )
+        #logging.info( (x-shipx,y-shipy,step, inds ) )
+        movemap[ inds ] = LowWeight
+        #logging.info( movemap )
 
 
 def genPathList(x,y):
