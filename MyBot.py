@@ -51,9 +51,9 @@ def doOneTurn():
 def initMaps(game_map):
     global Xship,Yship,Xmap,Ymap,pathlists,pointsetmaplist,angleof,speedof,gradientfield
     if not Xmap:
-        Xmap = np.outer( range(game_map.width), np.ones(game_map.height) )
-        Ymap = np.outer( np.ones(game_map.width), range(game_map.height) )
-        gradientfield = np.zeros([game_map.width,game_map.height])
+        Xmap = np.outer( range(game_map.width+14), np.ones(game_map.height+14) )
+        Ymap = np.outer( np.ones(game_map.width+14), range(game_map.height+14) )
+        gradientfield = np.zeros([game_map.width+14,game_map.height+14])
         pathlists = genPathLists()
         pointsetmaplist = getPointSetList(pathlists)
         speedof = np.sqrt(Xship * Xship + Yship * Yship).reshape(15*15)
@@ -65,7 +65,8 @@ class Analysis:
         self.me = game_map.get_me()
         # reinitialize
         gradientfield.fill(0)
-        self.applyPlanetFields(game_map,gradientfield)
+
+        # compute various quantities
         self.shipX,self.shipY = getEntityXYs(self.me.all_ships())
         self.closeShips = computeEntitiesDistances(
                 self.shipX, self.shipY,
@@ -87,7 +88,10 @@ class Analysis:
                 self.enemyshipX, self.enemyshipY)
         self.closeEnemyShips = self.enemyshipDist < 15
 
-    def applyPlanetFields(self,game_map,gradientfield):
+        # set up the strategic goals
+        self.setupStrategicGradient(game_map,gradientfield)
+
+    def setupStrategicGradient(self,game_map,gradientfield):
         for planet in game_map.all_planets():
             if planet.owner is None:
                 applyPlanetField(planet.x, planet.y,planet.radius,
@@ -110,11 +114,11 @@ class Analysis:
 
 def applyPlanetField(x, y, radius, gradientfield, strength, gradientradius):
     gradientfield += ( ( gradientradius - np.sqrt( 
-              np.multiply( Xmap - x, Xmap - x) + np.multiply( Ymap - y, Ymap - y)
+              np.multiply( Xmap - (x+7), Xmap - (x+7)) + np.multiply( Ymap - (y+7), Ymap - (y+y))
             ) ) * strength ).clip(min=0)
     # don't go to any point on the planet
     gradientfield += ( ( (radius+1) - np.sqrt( 
-              np.multiply( Xmap - x, Xmap - x) + np.multiply( Ymap - y, Ymap - y)
+              np.multiply( Xmap - (x+7), Xmap - (x+7)) + np.multiply( Ymap - (y+7), Ymap - (y+7))
             ) ) ).clip(max=.1, min=0) * LowWeight
 
 def getEntityXYs(myships):
@@ -176,8 +180,8 @@ class TurnState:
 
 def maneuverShip(ship, i, turnstate, analysis, game_map):
     movemap = gradientfield[ 
-                    max(ship.x-7,0):min(ship.x+8,game_map.width),
-                    max(ship.y-7,0):min(ship.y+8,game_map.height) 
+                    (ship.x-0):(ship.x+15),
+                    (ship.y-0):(ship.y+15) 
                 ].copy()
     # check friendly ships
     # we don't care about ramming enemy ships!
