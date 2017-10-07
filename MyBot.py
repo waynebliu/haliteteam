@@ -11,9 +11,9 @@ logging.basicConfig(filename='mybot.log',level=logging.DEBUG)
 
 
 # constants
-MyPlanetGradientRadius = 10
+MyPlanetGradientRadius = 20
 MyPlanetGradientFactor = 20
-UnownedPlanetGradientRadius = 200
+UnownedPlanetGradientRadius = 100
 UnownedPlanetGradientStrength = 10
 EnemyPlanetGradientRadius = 200
 EnemyPlanetGradientStrength = 1
@@ -28,6 +28,7 @@ gradientfield = None
 Xmap = None
 Ymap = None
 pathlists = None
+pathxys = None
 pointsetmaplist = None
 angleof = None
 speedof = None
@@ -53,16 +54,21 @@ def doOneTurn():
     # TURN END
 
 def initMaps(game_map):
-    global Xship,Yship,Xmap,Ymap,pathlists,pointsetmaplist,angleof,speedof,gradientfield,maxrangemask
+    global Xship,Yship,Xmap,Ymap,pathlists,pathxys,pointsetmaplist,angleof,speedof,gradientfield,maxrangemask
     if Xmap is None:
         Xmap = np.outer( range(game_map.width+14), np.ones(game_map.height+14) )
         Ymap = np.outer( np.ones(game_map.width+14), range(game_map.height+14) )
         gradientfield = np.zeros([game_map.width+14,game_map.height+14])
         pathlists = genPathLists()
+        pathxys = { (xm,ym):[ (x,y,step) 
+                for step,p in enumerate(pathlist) 
+                    for x,y in p]
+             for (xm,ym),pathlist in pathlists.items() }
+        #logging.info(pathlists)
         pointsetmaplist = getPointSetList(pathlists)
         speed = np.sqrt(Xship * Xship + Yship * Yship)
         speedof = speed.reshape(15*15)
-        angleof = ( (np.degrees(np.arctan2(Xship,Yship)) + 270 )% 360).reshape(15*15)
+        angleof = ( (np.degrees(np.arctan2(Xship,Yship)))% 360).reshape(15*15)
         maxrangemask = (speed >7).reshape(15*15)
 
 saved = 1
@@ -102,6 +108,10 @@ class Analysis:
 
         # set up the strategic goals
         self.setupStrategicGradient(game_map,gradientfield)
+        global saved
+        if saved % 10 == 0:
+            np.savetxt("gradient{}.csv".format(saved), gradientfield, delimiter=",")
+        saved += 1
 
     def setupStrategicGradient(self,game_map,gradientfield):
         for planet in game_map.all_planets():
@@ -112,7 +122,7 @@ class Analysis:
                         planet.num_docking_spots+UnownedPlanetGradientRadius)
             elif planet.owner == self.me:
                 strength =  planet.num_docking_spots - len(planet._docked_ship_ids)
-                if strength > 0:
+                if strength > 1:
                     applyPlanetField(planet.x, planet.y,planet.radius,
                         gradientfield,
                         strength*MyPlanetGradientFactor,
@@ -126,7 +136,7 @@ class Analysis:
 
 def applyPlanetField(x, y, radius, gradientfield, strength, gradientradius):
     #logging.info( ("planet", x, y, radius, strength, gradientradius) )
-    gradientfield += ( ( gradientradius / ( 
+    gradientfield += ( ( gradientradius - np.sqrt( 
               np.multiply( Xmap - (x+7), Xmap - (x+7)) 
               + np.multiply( Ymap - (y+7), Ymap - (y+7))
             ) ) * strength / gradientradius ).clip(min=0)
@@ -170,14 +180,15 @@ def commandShips(game_map, analysis):
         dock = False
         for p in np.argwhere(analysis.closePlanets[i]):
             #logging.info( (i,p,analysis.planetDist,analysis.planetRadius) )
-                planet = game_map.all_planets()[p[0]]
-                if (not ship.can_dock(planet)) or (
-                                planet.owner is not None 
-                                and planet.owner != analysis.me):
-                    continue
-                turnstate.addDock(ship,planet)
-                dock=True
-                break
+            planet = game_map.all_planets()[p[0]]
+            if (not ship.can_dock(planet)
+               ) or ( planet.owner is not None 
+                    and planet.owner != analysis.me
+               ) or ( planet.num_docking_spots <= len(planet._docked_ship_ids)):
+                continue
+            turnstate.addDock(ship,planet)
+            dock=True
+            break
         if dock:
             continue
 
@@ -194,10 +205,12 @@ class TurnState:
         return self.command_queue
     def addDock(self,ship,planet):
         self.command_queue.append(ship.dock(planet))
+        logging.info( ("dock", ship.x,ship.y,planet) )
     def addMove(self,ship,i,ind):
         self.command_queue.append(ship.thrust(speedof[ind],angleof[ind]) )
-        self.shippaths[i] = []
-    
+        xm,ym=ind%15-7,ind//15-7
+        self.shippaths[i] = pathxys[(xm,ym)]
+        logging.info( ("move", ship.x,ship.y,i,xm,ym) )
 
 def maneuverShip(ship, i, turnstate, analysis, game_map):
     movemap = gradientfield[ 
@@ -215,11 +228,11 @@ def maneuverShip(ship, i, turnstate, analysis, game_map):
             blotout(movemap, path, ship.x, ship.y)
         else:
             othership = analysis.me.all_ships()[other[0]]
-            blotout(movemap, [(othership.x,othership.y,i) for i in range(1,8)], ship.x, ship.y)
+            blotout(movemap, [(othership.x,othership.y,i) for i in range(1,15)], ship.x, ship.y)
     # find highest point in movemap and go there
     movemap[maxrangemask] = LowWeight
     target = movemap.argmax()
-    #logging.info( ("move", ship.x,ship.y,i,target%15-7,target/15-7) )
+    #logging.info( ("move", ship.x,ship.y,i,target%15-7,target//15-7) )
     turnstate.addMove( ship, i, target )
 
 
@@ -236,18 +249,18 @@ def blotout(movemap,path,shipx,shipy):
 def genPathList(x,y):
     ' assuming distance(x,y) <= moveMax (7) '
     path = []
-    for i in range(1,8):
-        xloc,yloc = x*i/7,y*i/7
+    for i in range(1,15):
+        xloc,yloc = x*i/14,y*i/14
         path.append( 
-            set( ( int(xloc-xoff),int(yloc-xoff) ) for xoff in [-.8,0,.8] for yoff in [-.8,0,.8]  )
+            set( ( int(xloc-xoff),int(yloc-xoff) ) for xoff in [-.4,.4] for yoff in [-.4,.4]  )
         )
     return path
 def multpath(paths,xm,ym):
     return [ {(x*xm, y*ym) for x,y in pset} for pset in paths ]
 def genPathLists():
     pathlists={}
-    for x in range(7):
-        for y in range(7):
+    for x in range(8):
+        for y in range(8):
             if x*x+y*y <= 49:
                 pathlists[ (x,y) ] = genPathList(x,y)
                 pathlists[ (-x,y) ] = multpath( pathlists[ (x,y) ], -1, 1 )
