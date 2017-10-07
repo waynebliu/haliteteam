@@ -68,7 +68,7 @@ def initMaps(game_map):
         pointsetmaplist = getPointSetList(pathlists)
         speed = np.sqrt(Xship * Xship + Yship * Yship)
         speedof = speed.reshape(15*15)
-        angleof = ( (np.degrees(np.arctan2(Xship,Yship)))% 360).reshape(15*15)
+        angleof = ( ( 90 - np.degrees(np.arctan2(Xship,Yship)) )% 360).reshape(15*15)
         maxrangemask = (speed >7).reshape(15*15)
 
 saved = 1
@@ -122,11 +122,10 @@ class Analysis:
                         planet.num_docking_spots+UnownedPlanetGradientRadius)
             elif planet.owner == self.me:
                 strength =  planet.num_docking_spots - len(planet._docked_ship_ids)
-                if strength > 1:
-                    applyPlanetField(planet.x, planet.y,planet.radius,
-                        gradientfield,
-                        strength*MyPlanetGradientFactor,
-                        planet.num_docking_spots+MyPlanetGradientRadius)
+                applyPlanetField(planet.x, planet.y,planet.radius,
+                    gradientfield,
+                    strength*MyPlanetGradientFactor,
+                    planet.num_docking_spots+MyPlanetGradientRadius)
             else:
                 applyPlanetField(planet.x, planet.y,planet.radius,
                     gradientfield,
@@ -136,10 +135,11 @@ class Analysis:
 
 def applyPlanetField(x, y, radius, gradientfield, strength, gradientradius):
     #logging.info( ("planet", x, y, radius, strength, gradientradius) )
-    gradientfield += ( ( gradientradius - np.sqrt( 
-              np.multiply( Xmap - (x+7), Xmap - (x+7)) 
-              + np.multiply( Ymap - (y+7), Ymap - (y+7))
-            ) ) * strength / gradientradius ).clip(min=0)
+    if strength > 0:
+        gradientfield += ( ( gradientradius - np.sqrt( 
+                  np.multiply( Xmap - (x+7), Xmap - (x+7)) 
+                  + np.multiply( Ymap - (y+7), Ymap - (y+7))
+                ) ) * strength / gradientradius ).clip(min=0)
     # don't go to any point on the planet
     planetmask = np.sqrt( 
               np.multiply( Xmap - (x+7), Xmap - (x+7)) 
@@ -232,8 +232,10 @@ def maneuverShip(ship, i, turnstate, analysis, game_map):
     # find highest point in movemap and go there
     movemap[maxrangemask] = LowWeight
     target = movemap.argmax()
-    #logging.info( ("move", ship.x,ship.y,i,target%15-7,target//15-7) )
-    turnstate.addMove( ship, i, target )
+    if movemap[target] < 0:
+        logging.info( ("no good move", ship.x,ship.y,i,target%15-7,target//15-7) )
+    else:
+        turnstate.addMove( ship, i, target )
 
 
 
