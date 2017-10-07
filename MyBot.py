@@ -126,7 +126,7 @@ class Analysis:
 
 def applyPlanetField(x, y, radius, gradientfield, strength, gradientradius):
     #logging.info( ("planet", x, y, radius, strength, gradientradius) )
-    gradientfield += ( ( gradientradius - np.sqrt( 
+    gradientfield += ( ( gradientradius / ( 
               np.multiply( Xmap - (x+7), Xmap - (x+7)) 
               + np.multiply( Ymap - (y+7), Ymap - (y+7))
             ) ) * strength / gradientradius ).clip(min=0)
@@ -170,9 +170,9 @@ def commandShips(game_map, analysis):
         dock = False
         for p in np.argwhere(analysis.closePlanets[i]):
             #logging.info( (i,p,analysis.planetDist,analysis.planetRadius) )
-            if analysis.planetDist[i][p[0]] < 5+analysis.planetRadius[p[0]]:
                 planet = game_map.all_planets()[p[0]]
-                if planet.is_full() or (planet.owner is not None 
+                if (not ship.can_dock(planet)) or (
+                                planet.owner is not None 
                                 and planet.owner != analysis.me):
                     continue
                 turnstate.addDock(ship,planet)
@@ -239,7 +239,7 @@ def genPathList(x,y):
     for i in range(1,8):
         xloc,yloc = x*i/7,y*i/7
         path.append( 
-            set( ( int(xloc-xoff),int(yloc-xoff) ) for xoff in [-.5,0,.5] for yoff in [-.5,0,.5]  )
+            set( ( int(xloc-xoff),int(yloc-xoff) ) for xoff in [-.8,0,.8] for yoff in [-.8,0,.8]  )
         )
     return path
 def multpath(paths,xm,ym):
